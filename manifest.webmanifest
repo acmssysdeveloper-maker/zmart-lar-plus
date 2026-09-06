@@ -1,0 +1,13 @@
+{
+  "name": "ZMART Lar+",
+  "short_name": "ZMART Lar+",
+  "description": "Do compromisso à realização.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f6f4ef",
+  "theme_color": "#0c1222",
+  "lang": "pt-BR",
+  "icons": [
+    {"src":"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%230c1222'/%3E%3Cpath d='M18 38 50 18l32 20v35H61V54H39v19H18z' fill='%23d7bd7a'/%3E%3C/svg%3E","sizes":"any","type":"image/svg+xml"}
+  ]
+}

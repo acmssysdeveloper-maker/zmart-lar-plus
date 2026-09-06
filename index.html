@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101a2f">
+  <meta name="description" content="ZMART Lar+ — controle financeiro imobiliário, pagamentos e comprovantes.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+  <title>ZMART Lar+</title>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js?v=70').catch(err => console.warn('SW:', err)));
+    }
+  </script>
+</body>
+</html>
