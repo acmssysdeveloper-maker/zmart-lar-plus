@@ -350,7 +350,7 @@
     const paidItems = state.installments.filter(i=>i.status==='paid');
     const partialItems = state.installments.filter(i=>i.status==='partial');
     const pending = state.installments.filter(i=>i.status!=='paid');
-    const overdue = pending.filter(i=>i.dueDate < today()).length;
+    const overdue = pending.filter(i=>effectiveDueDate(i) < today()).length;
     return {paid,debt:Math.max(0,state.property.total-paid),paidPct:pct(paid,state.property.total),paidCount:paidItems.length,partialCount:partialItems.length,pendingCount:pending.length,overdue,
       entryTotal,entryPaid,entryDebt:Math.max(0,entryTotal-entryPaid),entryPct:pct(entryPaid,entryTotal),entryCount:entryItems.length,entryPaidCount:entryItems.filter(i=>i.status==='paid').length,
       parcelTotal,parcelPaid,parcelDebt:Math.max(0,parcelTotal-parcelPaid),parcelPct:pct(parcelPaid,parcelTotal),parcelCount:parcelItems.length,parcelPaidCount:parcelItems.filter(i=>i.status==='paid').length,
@@ -399,7 +399,7 @@
   }
   function dashboardPage(){
     const c=calc(); const pend=[...state.installments].filter(i=>i.status!=='paid').sort((a,b)=>a.dueDate.localeCompare(b.dueDate)); const next=pend[0];
-    const overdueNow=state.installments.filter(i=>i.status!=='paid'&&i.dueDate<today());
+    const overdueNow=state.installments.filter(i=>i.status!=='paid'&&effectiveDueDate(i)<today());
     const paidLateList=state.installments.filter(i=>i.paidLate);
     const alertBanner=(()=>{
       if(!overdueNow.length&&!paidLateList.length) return '';
@@ -498,7 +498,7 @@
     <div class="entry-payments-grid">${paymentCards||'<div class="kanban-empty">Nenhum pagamento registrado ainda. Use "gerar novo pagamento" para lançar o primeiro comprovante.</div>'}</div>`;
   }
   function pagamentosPage(){
-    const paid=state.installments.filter(i=>i.status==='paid').sort((a,b)=>(b.paidAt||'').localeCompare(a.paidAt||'')); const pending=state.installments.filter(i=>i.status!=='paid').sort((a,b)=>a.dueDate.localeCompare(b.dueDate)); const overdue=pending.filter(i=>i.dueDate<today()); const show=x=>paymentFilter==='recebidos'?x.filter(i=>i.status==='paid'):paymentFilter==='pendentes'?x.filter(i=>i.status!=='paid'):paymentFilter==='vencidos'?x.filter(i=>i.status!=='paid'&&i.dueDate<today()):x; const paidLateItems=paid.filter(i=>i.paidLate);
+    const paid=state.installments.filter(i=>i.status==='paid').sort((a,b)=>(b.paidAt||'').localeCompare(a.paidAt||'')); const pending=state.installments.filter(i=>i.status!=='paid').sort((a,b)=>a.dueDate.localeCompare(b.dueDate)); const overdue=pending.filter(i=>effectiveDueDate(i)<today()); const show=x=>paymentFilter==='recebidos'?x.filter(i=>i.status==='paid'):paymentFilter==='pendentes'?x.filter(i=>i.status!=='paid'):paymentFilter==='vencidos'?x.filter(i=>i.status!=='paid'&&effectiveDueDate(i)<today()):x; const paidLateItems=paid.filter(i=>i.paidLate);
     const overdueItems=overdue;
     const showPaidLate=paymentFilter==='atrasados';
     return `${pageHead('MOVIMENTAÇÃO', 'Pagamentos', 'Histórico completo de recebimentos, pendências e atrasos.',role==='vendedor'?linkAction('newPayment','+ registrar pagamento','green-link'):linkAction('paymentReport','imprimir pagamentos'))}
@@ -530,9 +530,26 @@
           </section>
         </div>`
     }`;}
-  function lateDays(i,asOf=null){if(!i?.dueDate)return 0;const end=new Date((asOf||today())+'T00:00:00');const start=new Date(i.dueDate+'T00:00:00');return Math.max(0,Math.floor((end-start)/86400000));}
+  // Retorna a data de vencimento efetiva de um lançamento.
+  // Para entradas: usa entryDeadline (prazo final para quitar) quando configurado,
+  // pois o comprador pode pagar parcialmente até essa data sem incorrer em atraso.
+  // Para parcelas: usa dueDate normalmente.
+  function effectiveDueDate(i){
+    if(i?.type==='entrada'){
+      const dl=state.schedule?.entryDeadline||'';
+      if(dl) return dl;
+    }
+    return i?.dueDate||'';
+  }
+  function lateDays(i,asOf=null){
+    const due=effectiveDueDate(i)||i?.dueDate;
+    if(!due)return 0;
+    const end=new Date((asOf||today())+'T00:00:00');
+    const start=new Date(due+'T00:00:00');
+    return Math.max(0,Math.floor((end-start)/86400000));
+  }
   function lateInterest(i,asOf=null){const rate=Math.max(0,Number(state.schedule?.lateInterestRate||0));if(!rate)return 0;const days=lateDays(i,asOf);if(!days)return 0;const base=Number(i.value)||0;return base*(rate/100)*(state.schedule?.lateInterestPeriod==='daily'?days:days/30);}
-  function isOverdue(i){return i.status!=='paid'&&i.dueDate<today();}
+  function isOverdue(i){return i.status!=='paid'&&effectiveDueDate(i)<today();}
   function overdueLabel(i){const d=lateDays(i);if(d<=0)return '';if(d===1)return '1 dia em atraso';return d+' dias em atraso';}
   function paymentCard(i){
     const seller=role==='vendedor';
@@ -722,7 +739,7 @@
   function paymentModal(id){
     if(role!=='vendedor')return; const i=state.installments.find(x=>x.id===id); if(!i)return;
     const hasReceipt=!!i.receipt?.blobId;
-    showModal(i.status==='paid'?'Editar pagamento':'Validar recebimento',`<form id="payForm"><div class="payment-focus"><span>${esc(i.label)}</span><strong>${money(i.value)}</strong><small>Vencimento ${dateBR(i.dueDate)} · limite dia ${Number(state.schedule?.paymentDayLimit||1)}</small>${i.status==='partial'?`<small class="late-note">Já recebido: ${money(i.received)} · falta ${money(installmentBalance(i))}</small>`:''}${i.status!=='paid'&&i.dueDate<today()&&lateInterest(i)?`<small class="late-note">Juros estimados pelo atraso: ${money(lateInterest(i))} · total teórico ${money(i.value+lateInterest(i))}</small>`:''}</div><label class="field"><span>Valor recebido${i.status==='partial'?' (deste recebimento)':''}</span><input id="payValue" type="text" data-money inputmode="decimal" value="${formatMoneyBR(i.status==='paid'?i.paidValue:i.status==='partial'?installmentBalance(i):i.value)}" placeholder="0,00" required></label><label class="field"><span>Data do recebimento</span><input id="payDate" type="text" data-date inputmode="numeric" value="${formatDateBRInput(i.status==='paid'?i.paidAt:today())}" placeholder="DD/MM/AAAA" maxlength="10" required></label><label class="field"><span>Comprovante original</span><input id="payReceipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" ${i.status==='paid'?'':'required'}></label><small class="helper">Para validar um pagamento novo, o comprovante original é obrigatório. PDF e JPG/PNG são aceitos; o original fica preservado.</small><label class="field"><span>Observação</span><textarea id="payNote" rows="3">${esc(i.note||'')}</textarea></label><div class="form-actions"><button type="button" class="text-link" id="cancelPay">cancelar</button><button class="primary-link green-button" type="submit">${i.status==='paid'?'salvar pagamento':'ler comprovante e validar'}</button></div></form>`);
+    showModal(i.status==='paid'?'Editar pagamento':'Validar recebimento',`<form id="payForm"><div class="payment-focus"><span>${esc(i.label)}</span><strong>${money(i.value)}</strong><small>Vencimento ${dateBR(i.dueDate)} · limite dia ${Number(state.schedule?.paymentDayLimit||1)}</small>${i.status==='partial'?`<small class="late-note">Já recebido: ${money(i.received)} · falta ${money(installmentBalance(i))}</small>`:''}${i.status!=='paid'&&effectiveDueDate(i)<today()&&lateInterest(i)?`<small class="late-note">Juros estimados pelo atraso: ${money(lateInterest(i))} · total teórico ${money(i.value+lateInterest(i))}</small>`:''}</div><label class="field"><span>Valor recebido${i.status==='partial'?' (deste recebimento)':''}</span><input id="payValue" type="text" data-money inputmode="decimal" value="${formatMoneyBR(i.status==='paid'?i.paidValue:i.status==='partial'?installmentBalance(i):i.value)}" placeholder="0,00" required></label><label class="field"><span>Data do recebimento</span><input id="payDate" type="text" data-date inputmode="numeric" value="${formatDateBRInput(i.status==='paid'?i.paidAt:today())}" placeholder="DD/MM/AAAA" maxlength="10" required></label><label class="field"><span>Comprovante original</span><input id="payReceipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" ${i.status==='paid'?'':'required'}></label><small class="helper">Para validar um pagamento novo, o comprovante original é obrigatório. PDF e JPG/PNG são aceitos; o original fica preservado.</small><label class="field"><span>Observação</span><textarea id="payNote" rows="3">${esc(i.note||'')}</textarea></label><div class="form-actions"><button type="button" class="text-link" id="cancelPay">cancelar</button><button class="primary-link green-button" type="submit">${i.status==='paid'?'salvar pagamento':'ler comprovante e validar'}</button></div></form>`);
     applyBRMasks($('#payForm'));
     $('#cancelPay').addEventListener('click',closeModal);
     $('#payForm').addEventListener('submit',async e=>{
