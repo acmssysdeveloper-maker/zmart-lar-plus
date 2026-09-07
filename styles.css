@@ -88,8 +88,14 @@
 .two-journeys{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 18px}
 .two-journeys .timeline-card{margin:0}
 
-.wide-chart{grid-column:auto;background:#fff;border:1px solid #eee7dc;border-radius:18px;padding:20px 22px;margin:0 0 18px}
+.wide-chart{grid-column:auto;background:#fff;border:1px solid #eee7dc;border-radius:18px;padding:20px 22px;margin:0 0 18px;position:relative}
 .line-chart-tall{width:100%;height:260px;display:block;margin-top:10px}
+.chart-tooltip{position:absolute;left:0;top:0;pointer-events:none;background:#101827;color:#fff;border-radius:12px;padding:10px 13px;font-size:11px;box-shadow:0 16px 38px rgba(10,16,30,.3);opacity:0;transform:translateY(4px);transition:opacity .12s ease,transform .12s ease;z-index:6;white-space:nowrap}
+.chart-tooltip.show{opacity:1;transform:translateY(0)}
+.chart-tooltip strong{display:block;font-size:10px;letter-spacing:.3px;color:#e5d8b9;margin-bottom:7px;font-weight:900}
+.chart-tooltip span{display:flex;align-items:center;gap:6px;margin-top:4px;color:#c7cedb;font-size:11px}
+.chart-tooltip span .dot{width:7px;height:7px;flex:0 0 auto}
+.chart-tooltip span b{color:#fff;margin-left:14px;font-weight:900}
 .chart-legend-inline{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
 .chart-legend-inline span{font-size:10px;color:var(--muted);display:flex;align-items:center;gap:4px}
 
