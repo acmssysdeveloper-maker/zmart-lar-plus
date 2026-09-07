@@ -1205,7 +1205,10 @@
   function drawCombinedLine(){
     const svg=$('#lineChart'); if(!svg)return;
     const months=historiesByMonth();
-    if(!months.length){svg.innerHTML='<text x="400" y="150" text-anchor="middle" font-size="13" fill="#9aa0ab">Nenhum pagamento registrado ainda.</text>';return;}
+    const wrap=svg.closest('.wide-chart');
+    let tip=wrap?wrap.querySelector('.chart-tooltip'):null;
+    if(wrap&&!tip){tip=document.createElement('div');tip.className='chart-tooltip';wrap.appendChild(tip);}
+    if(!months.length){svg.innerHTML='<text x="400" y="150" text-anchor="middle" font-size="13" fill="#9aa0ab">Nenhum pagamento registrado ainda.</text>';if(tip)tip.classList.remove('show');return;}
     const W=800,H=300,pl=56,pr=18,pt=24,pb=44;
     const iw=W-pl-pr, ih=H-pt-pb;
     const maxVal=Math.max(state.property.total,1);
@@ -1243,7 +1246,55 @@
     const lastTotal=totalPts.at(-1);
     const dots=`<circle cx="${lastEntry[0].toFixed(1)}" cy="${lastEntry[1].toFixed(1)}" r="5" fill="#b8944e"/>` +
                 `<circle cx="${lastTotal[0].toFixed(1)}" cy="${lastTotal[1].toFixed(1)}" r="5" fill="#3d8f66"/>`;
-    svg.innerHTML=`${gridLines}<path d="${entryArea}" fill="rgba(184,148,78,.18)"/><path d="${parcelAreaD}" fill="rgba(61,143,102,.15)"/><path d="${entryD}" fill="none" stroke="#b8944e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="${totalD}" fill="none" stroke="#3d8f66" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="${debtD}" fill="none" stroke="#8fa3c0" stroke-width="1.8" stroke-dasharray="5 4" stroke-linecap="round" stroke-linejoin="round"/>${dots}${xLabels}<line x1="${pl}" y1="${pt}" x2="${pl}" y2="${H-pb}" stroke="#ddd8d0" stroke-width="1"/><line x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}" stroke="#ddd8d0" stroke-width="1"/>`;
+    const cursorGroup=`<g id="lineCursor" style="display:none;pointer-events:none">
+      <line id="lineCursorLine" x1="0" y1="${pt}" x2="0" y2="${H-pb}" stroke="#8b93a3" stroke-width="1" stroke-dasharray="3 3"/>
+      <circle id="lineCursorEntry" r="4.5" fill="#b8944e" stroke="#fff" stroke-width="1.5"/>
+      <circle id="lineCursorTotal" r="4.5" fill="#3d8f66" stroke="#fff" stroke-width="1.5"/>
+      <circle id="lineCursorDebt" r="4.5" fill="#8fa3c0" stroke="#fff" stroke-width="1.5"/>
+    </g>`;
+    svg.innerHTML=`${gridLines}<path d="${entryArea}" fill="rgba(184,148,78,.18)"/><path d="${parcelAreaD}" fill="rgba(61,143,102,.15)"/><path d="${entryD}" fill="none" stroke="#b8944e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="${totalD}" fill="none" stroke="#3d8f66" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="${debtD}" fill="none" stroke="#8fa3c0" stroke-width="1.8" stroke-dasharray="5 4" stroke-linecap="round" stroke-linejoin="round"/>${dots}${xLabels}<line x1="${pl}" y1="${pt}" x2="${pl}" y2="${H-pb}" stroke="#ddd8d0" stroke-width="1"/><line x1="${pl}" y1="${H-pb}" x2="${W-pr}" y2="${H-pb}" stroke="#ddd8d0" stroke-width="1"/>${cursorGroup}<rect id="lineHoverArea" x="${pl}" y="${pt}" width="${iw}" height="${ih}" fill="transparent" pointer-events="all" style="cursor:crosshair"/>`;
+
+    // Interactive hover: shows date + values as the user moves the cursor (mouse or touch)
+    const cursor=svg.querySelector('#lineCursor');
+    const cursorLine=svg.querySelector('#lineCursorLine');
+    const cEntry=svg.querySelector('#lineCursorEntry');
+    const cTotal=svg.querySelector('#lineCursorTotal');
+    const cDebt=svg.querySelector('#lineCursorDebt');
+    const hoverArea=svg.querySelector('#lineHoverArea');
+
+    function showAt(clientX){
+      const svgRect=svg.getBoundingClientRect();
+      if(!svgRect.width)return;
+      const relX=(clientX-svgRect.left)/svgRect.width*W;
+      let idx=0,best=Infinity;
+      months.forEach((m,i)=>{const d=Math.abs(xs(i)-relX);if(d<best){best=d;idx=i;}});
+      const m=months[idx];
+      const x=xs(idx);
+      cursorLine.setAttribute('x1',x.toFixed(1));cursorLine.setAttribute('x2',x.toFixed(1));
+      cEntry.setAttribute('cx',x.toFixed(1));cEntry.setAttribute('cy',ys(m.cumEntry).toFixed(1));
+      cTotal.setAttribute('cx',x.toFixed(1));cTotal.setAttribute('cy',ys(m.cumTotal).toFixed(1));
+      cDebt.setAttribute('cx',x.toFixed(1));cDebt.setAttribute('cy',ys(m.debt).toFixed(1));
+      cursor.style.display='block';
+      if(tip&&wrap){
+        tip.innerHTML=`<strong>${m.label}</strong><span><i class="dot gold-dot"></i>Entrada acum. <b>${money(m.cumEntry)}</b></span><span><i class="dot green-dot"></i>Parcelas acum. <b>${money(m.cumParcel)}</b></span><span><i class="dot navy-dot-light"></i>Saldo devedor <b>${money(m.debt)}</b></span>`;
+        tip.classList.add('show');
+        const wrapRect=wrap.getBoundingClientRect();
+        let pxX=svgRect.left-wrapRect.left+(x/W)*svgRect.width;
+        let pxY=svgRect.top-wrapRect.top+(ys(m.debt)/H)*svgRect.height;
+        const tw=tip.offsetWidth,th=tip.offsetHeight;
+        pxX=Math.min(Math.max(pxX-tw/2,6),Math.max(6,wrapRect.width-tw-6));
+        pxY=Math.max(pxY-th-16,6);
+        tip.style.left=pxX+'px';
+        tip.style.top=pxY+'px';
+      }
+    }
+    function hide(){cursor.style.display='none';if(tip)tip.classList.remove('show');}
+
+    hoverArea.onmousemove=e=>showAt(e.clientX);
+    hoverArea.onmouseleave=hide;
+    hoverArea.ontouchstart=e=>{if(e.touches[0])showAt(e.touches[0].clientX);};
+    hoverArea.ontouchmove=e=>{if(e.touches[0]){showAt(e.touches[0].clientX);e.preventDefault();}};
+    hoverArea.ontouchend=hide;
   }
 
 
