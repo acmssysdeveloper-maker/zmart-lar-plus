@@ -9,6 +9,7 @@ create table if not exists sales (
   audit jsonb not null default '[]',
   settings jsonb not null default '{}',
   seller_password text not null default 'Zmart@123', -- senha de acesso do papel "vendedor" para esta venda
+  buyer_password text not null default 'Zmart@123',   -- senha de acesso do papel "comprador" para esta venda
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
