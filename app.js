@@ -311,6 +311,14 @@
   // Registra um recebimento (parcial ou total) sobre um lançamento, acumulando ao que já havia.
   // receiptRef (opcional) vincula ESTE pagamento específico ao seu próprio comprovante armazenado,
   // para que cada pagamento parcial mantenha seu arquivo recuperável mesmo após outros pagamentos.
+  // Resolve a data de pagamento para fins de cálculo de atraso.
+  // A data do comprovante é a fonte de verdade — quando disponível e anterior à data informada,
+  // ela é usada para não penalizar o comprador por lançamento tardio do vendedor.
+  function resolveEffectivePaymentDate(item, candidateDate){
+    const receiptDate = item.receipt?.extracted?.date || '';
+    if(receiptDate && candidateDate && receiptDate < candidateDate) return receiptDate;
+    return candidateDate;
+  }
   function applyPayment(item,amount,date,note,receiptRef=null){
     const add=Number(amount)||0;
     item.received=Number((Number(item.received||0)+add).toFixed(2));
@@ -318,8 +326,10 @@
     item.paidAt=date||item.paidAt||today();
     item.status=installmentStatus(item.value,item.received);
     item.history=Array.isArray(item.history)?item.history:[];
-    const lateDaysOnPay=lateDays({dueDate:item.dueDate},item.paidAt||today());
-    const lateIntOnPay=lateDaysOnPay>0?lateInterest({dueDate:item.dueDate,value:item.value},item.paidAt||today()):0;
+    // Usa a data efetiva (comprovante se anterior ao lançamento) para não penalizar o comprador.
+    const _effectiveDate=resolveEffectivePaymentDate(item,item.paidAt||today());
+    const lateDaysOnPay=lateDays({dueDate:item.dueDate},_effectiveDate);
+    const lateIntOnPay=lateDaysOnPay>0?lateInterest({dueDate:item.dueDate,value:item.value},_effectiveDate):0;
     const entry={id:uid(),amount:add,date:item.paidAt,note:note||'',at:new Date().toISOString(),lateDays:lateDaysOnPay,lateInterest:lateIntOnPay};
     if(receiptRef?.blobId){entry.receiptBlobId=receiptRef.blobId;entry.receiptName=receiptRef.originalName||receiptRef.name||'comprovante';}
     item.history.push(entry);
@@ -720,8 +730,20 @@
       if(value<=0){showToast('Informe um valor recebido maior que zero.');return;}
       if(i.status!=='paid' && !file){showToast('Anexe o comprovante original para validar.');return;}
       try{
-        if(file){const parsed=await parseReceiptFile(file);const paymentKey=i.id+'_p_'+uid();const receiptRef=await saveOriginalReceiptFor(file,i.id,paymentKey,parsed);i.receipt={...(i.receipt||{}),validation:{status:'review',source:'payment-form'}};const noteVal=$('#payNote')?.value?.trim()||'';closeModal();reviewAndValidateModal(i.id,parsed,value,date,noteVal,receiptRef);}
-        else {i.received=Number(value.toFixed(2));i.paidValue=i.received;i.paidAt=date;i.status=installmentStatus(i.value,i.received);i.note=$('#payNote').value.trim();i.history=Array.isArray(i.history)?i.history:[];const lateD2=lateDays({dueDate:i.dueDate},date);const lateI2=lateD2>0?lateInterest({dueDate:i.dueDate,value:i.value},date):0;i.history.push({amount:value,date,note:'edição manual',at:new Date().toISOString(),edit:true,lateDays:lateD2,lateInterest:lateI2});if(lateD2>0){i.paidLate=true;i.lateDaysOnPayment=lateD2;i.lateInterestCharged=lateI2;}else{i.paidLate=false;i.lateDaysOnPayment=0;i.lateInterestCharged=0;}audit('EDITOU_PAGAMENTO',i.label);saveState();closeModal();renderPage(currentPage);showToast('Pagamento atualizado.');}
+        if(file){const parsed=await parseReceiptFile(file);const paymentKey=i.id+'_p_'+uid();const receiptRef=await saveOriginalReceiptFor(file,i.id,paymentKey,parsed);i.receipt={...(i.receipt||{}),validation:{status:'review',source:'payment-form'}};const noteVal=$('#payNote')?.value?.trim()||'';
+        // Passa null como enteredDate quando há comprovante: o modal de revisão deve usar a data
+        // lida do comprovante (p.date) como fonte primária, protegendo o comprador de penalidades
+        // causadas por lançamentos tardios do vendedor.
+        closeModal();reviewAndValidateModal(i.id,parsed,value,null,noteVal,receiptRef);}
+        else {
+          // Sem comprovante: verifica se a data digitada está fora das janelas de vencimento.
+          // Se a data informada for futura ou posterior ao vencimento em mais de 30 dias,
+          // pergunta ao vendedor se a data está correta para não punir o comprador.
+          const _manualLate=lateDays({dueDate:i.dueDate},date);
+          if(_manualLate>30 && date>i.dueDate){
+            if(!confirm(`Atenção: a data informada (${dateBR(date)}) é ${_manualLate} dias após o vencimento (${dateBR(i.dueDate)}).\n\nIsso registrará atraso para o comprador.\n\nA data está correta? Clique OK para confirmar ou Cancelar para corrigir.`))return;
+          }
+          i.received=Number(value.toFixed(2));i.paidValue=i.received;i.paidAt=date;i.status=installmentStatus(i.value,i.received);i.note=$('#payNote').value.trim();i.history=Array.isArray(i.history)?i.history:[];const lateD2=lateDays({dueDate:i.dueDate},date);const lateI2=lateD2>0?lateInterest({dueDate:i.dueDate,value:i.value},date):0;i.history.push({amount:value,date,note:'edição manual',at:new Date().toISOString(),edit:true,lateDays:lateD2,lateInterest:lateI2});if(lateD2>0){i.paidLate=true;i.lateDaysOnPayment=lateD2;i.lateInterestCharged=lateI2;}else{i.paidLate=false;i.lateDaysOnPayment=0;i.lateInterestCharged=0;}audit('EDITOU_PAGAMENTO',i.label);saveState();closeModal();renderPage(currentPage);showToast('Pagamento atualizado.');}
       }catch(err){console.error(err);showToast(err.message||'Não foi possível processar o comprovante.');}
     });
   }
@@ -810,8 +832,16 @@
     if(p.amount&&Math.abs(p.amount-expected)>Math.max(.01,Number(state.settings?.validationTolerance||.01)))issues.push(`Valor do comprovante (${money(p.amount)}) difere do valor previsto (${money(expected)}).`);
     if(p.amount&&Math.abs(p.amount-amount)>Math.max(.01,Number(state.settings?.validationTolerance||.01)))issues.push(`Valor informado (${money(amount)}) difere do valor lido (${money(p.amount)}).`);
     if(!p.amount)issues.push('O valor não foi identificado automaticamente.'); if(!p.date)issues.push('A data não foi identificada automaticamente.');
+    // Alerta de divergência entre data do comprovante e data de lançamento informada pelo vendedor.
+    // A data do comprovante é a fonte de verdade — o comprador não pode ser penalizado por atraso
+    // de lançamento do vendedor. Se divergirem e a data informada for MAIS TARDIA que a do
+    // comprovante, o sistema avisa e força o uso da data correta por padrão.
+    if(p.date && enteredDate && p.date !== enteredDate && p.date < enteredDate){
+      issues.push(`⚠ A data do lançamento (${dateBR(enteredDate)}) é mais tardia que a data do comprovante (${dateBR(p.date)}). O sistema usará a data do comprovante para não penalizar o comprador.`);
+      enteredDate = p.date; // corrige silenciosamente — o campo já vai exibir a data certa
+    }
     i.receipt={...(i.receipt||{}),validation:{status:'review',issues,ocrMethod:parsed.method,ocrConfidence:parsed.confidence||p.confidence||0}};saveState();
-    showModal('Validar comprovante',`<div class="import-review-note"><b>O sistema não valida sozinho.</b> Revise os dados lidos do documento. O original permanecerá anexado ao pagamento.</div><form id="reviewReceiptForm" class="form-grid"><label class="field"><span>Valor recebido</span><input id="rAmount" type="text" data-money inputmode="decimal" value="${formatMoneyBR(amount)}" placeholder="0,00" required></label><label class="field"><span>Data do recebimento</span><input id="rDate" type="text" data-date inputmode="numeric" value="${formatDateBRInput(enteredDate||p.date||today())}" placeholder="DD/MM/AAAA" maxlength="10" required></label><label class="field"><span>Pagador</span><input id="rPayer" value="${esc(p.payerName||'')}" ></label><label class="field"><span>CPF/CNPJ do pagador</span><input id="rPayerDoc" value="${esc(p.payerDoc||'')}"></label><label class="field"><span>Recebedor</span><input id="rReceiver" value="${esc(p.receiverName||'')}"></label><label class="field"><span>CPF/CNPJ do recebedor</span><input id="rReceiverDoc" value="${esc(p.receiverDoc||'')}"></label><label class="field"><span>Referência / parcela</span><input id="rReference" value="${esc(p.reference||i.label)}"></label><label class="field"><span>Forma de pagamento</span><input id="rMethod" value="${esc(p.paymentMethod||'PIX')}"></label><label class="field"><span>Situação da transação</span><input id="rStatus" value="${esc(p.transactionStatus||'')}" placeholder="EFETIVADA"></label><label class="field"><span>ID da transação</span><input id="rTxId" value="${esc(p.transactionId||'')}"></label><label class="field wide"><span>Imóvel / contrato</span><input id="rProperty" value="${esc(p.property||state.property.title)}"></label><label class="field wide"><span>Observações</span><textarea id="rNote" rows="3">${esc(note||i.note||'')}</textarea></label><div class="field wide">${issues.length?`<div class="validation-warning"><b>Alertas detectados</b><ul>${issues.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:`<div class="validation-ok">Nenhuma divergência crítica detectada.</div>`}<div class="confidence-bar"><i style="width:${Math.round((p.confidence||0)*100)}%"></i></div><small class="helper">Confiança da extração: ${Math.round((p.confidence||0)*100)}%. Confiança do OCR não substitui conferência humana.</small></div><div class="form-actions wide"><button class="text-link" type="button" id="cancelReview">cancelar</button><button class="primary-link green-button" type="submit">confirmar validação</button></div></form>`);
+    showModal('Validar comprovante',`<div class="import-review-note"><b>O sistema não valida sozinho.</b> Revise os dados lidos do documento. O original permanecerá anexado ao pagamento.</div><form id="reviewReceiptForm" class="form-grid"><label class="field"><span>Valor recebido</span><input id="rAmount" type="text" data-money inputmode="decimal" value="${formatMoneyBR(amount)}" placeholder="0,00" required></label><label class="field"><span>Data do recebimento</span><input id="rDate" type="text" data-date inputmode="numeric" value="${formatDateBRInput(p.date||enteredDate||today())}" placeholder="DD/MM/AAAA" maxlength="10" required><small class="helper">${p.date?'📄 Data extraída do comprovante — fonte correta. Altere somente se o OCR errou.':`Informe a data exata do comprovante (não a data de lançamento).`}</small></label><label class="field"><span>Pagador</span><input id="rPayer" value="${esc(p.payerName||'')}" ></label><label class="field"><span>CPF/CNPJ do pagador</span><input id="rPayerDoc" value="${esc(p.payerDoc||'')}"></label><label class="field"><span>Recebedor</span><input id="rReceiver" value="${esc(p.receiverName||'')}"></label><label class="field"><span>CPF/CNPJ do recebedor</span><input id="rReceiverDoc" value="${esc(p.receiverDoc||'')}"></label><label class="field"><span>Referência / parcela</span><input id="rReference" value="${esc(p.reference||i.label)}"></label><label class="field"><span>Forma de pagamento</span><input id="rMethod" value="${esc(p.paymentMethod||'PIX')}"></label><label class="field"><span>Situação da transação</span><input id="rStatus" value="${esc(p.transactionStatus||'')}" placeholder="EFETIVADA"></label><label class="field"><span>ID da transação</span><input id="rTxId" value="${esc(p.transactionId||'')}"></label><label class="field wide"><span>Imóvel / contrato</span><input id="rProperty" value="${esc(p.property||state.property.title)}"></label><label class="field wide"><span>Observações</span><textarea id="rNote" rows="3">${esc(note||i.note||'')}</textarea></label><div class="field wide">${issues.length?`<div class="validation-warning"><b>Alertas detectados</b><ul>${issues.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`:`<div class="validation-ok">Nenhuma divergência crítica detectada.</div>`}<div class="confidence-bar"><i style="width:${Math.round((p.confidence||0)*100)}%"></i></div><small class="helper">Confiança da extração: ${Math.round((p.confidence||0)*100)}%. Confiança do OCR não substitui conferência humana.</small></div><div class="form-actions wide"><button class="text-link" type="button" id="cancelReview">cancelar</button><button class="primary-link green-button" type="submit">confirmar validação</button></div></form>`);
     $('#cancelReview').addEventListener('click',closeModal);
     applyBRMasks($('#reviewReceiptForm'));
     $('#reviewReceiptForm').addEventListener('submit',async e=>{e.preventDefault();const finalAmount=readMoney($('#rAmount')),finalDate=readDate($('#rDate'))||today();if(finalAmount<=0){showToast('Valor inválido.');return;}
