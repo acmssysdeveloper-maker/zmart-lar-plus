@@ -35,6 +35,14 @@
   // "Melhor esforço": roda em segundo plano; se falhar, a cópia local (fonte da sessão atual) não é afetada.
   async function pushSalesToSupabase(){
     if(!supabaseConfigured()) return;
+    const localSaleIds=new Set(state.sales.map(s=>s.id));
+    // Delete Supabase sales that no longer exist locally (removes duplicates)
+    const remoteSales=await sbFetch('/rest/v1/sales?select=id',{method:'GET'})||[];
+    const remoteOrphans=remoteSales.map(r=>r.id).filter(id=>!localSaleIds.has(id));
+    if(remoteOrphans.length){
+      await sbFetch(`/rest/v1/installments?sale_id=in.(${remoteOrphans.map(encodeURIComponent).join(',')})`,{method:'DELETE',prefer:'return=minimal'});
+      await sbFetch(`/rest/v1/sales?id=in.(${remoteOrphans.map(encodeURIComponent).join(',')})`,{method:'DELETE',prefer:'return=minimal'});
+    }
     for(const sale of state.sales){
       await sbFetch('/rest/v1/sales?on_conflict=id',{method:'POST',prefer:'resolution=merge-duplicates,return=minimal',
         body:JSON.stringify([{id:sale.id,property:sale.property,schedule:sale.schedule,audit:sale.audit,settings:sale.settings,
@@ -58,14 +66,31 @@
       ]);
       if(!Array.isArray(salesRows)||!salesRows.length) return null;
       const byId={}; (instRows||[]).forEach(r=>{(byId[r.sale_id]=byId[r.sale_id]||[]).push(rowToInstallment(r));});
-      const sales=salesRows.map(r=>({id:r.id,property:r.property,schedule:r.schedule,audit:r.audit||[],settings:r.settings||{},
+      const allSales=salesRows.map(r=>({id:r.id,property:r.property,schedule:r.schedule,audit:r.audit||[],settings:r.settings||{},
         sellerPassword:r.seller_password||'Zmart@123',buyerPassword:r.buyer_password||'Zmart@123',
         installments:byId[r.id]||[],receiptInbox:[],createdAt:r.created_at,updatedAt:r.updated_at}));
-      return {version:STATE_VERSION,activeSaleId:sales[0].id,sales,updatedAt:new Date().toISOString()};
+      // Deduplicate: if same property title+total appears more than once, keep only the one with most payments (received > 0) or latest updatedAt
+      const seenTitles=new Map();
+      const sales=[];
+      for(const s of allSales){
+        const key=(s.property?.title||'')+'|'+(s.property?.total||'');
+        const existing=seenTitles.get(key);
+        if(!existing){ seenTitles.set(key,s); sales.push(s); }
+        else {
+          // Keep the one with more payments
+          const sPaid=(s.installments||[]).filter(i=>i.status==='paid').length;
+          const ePaid=(existing.installments||[]).filter(i=>i.status==='paid').length;
+          if(sPaid>ePaid||(sPaid===ePaid&&(s.updatedAt||'')>(existing.updatedAt||''))){
+            const idx=sales.indexOf(existing); if(idx>=0) sales.splice(idx,1,s); seenTitles.set(key,s);
+          }
+        }
+      }
+      const bestActive=sales.find(s=>s.installments.some(i=>i.status==='paid'))?.id||sales[0].id;
+      return {version:STATE_VERSION,activeSaleId:bestActive,sales,updatedAt:new Date().toISOString()};
     }catch(err){ console.warn('Falha ao buscar dados da nuvem, mantendo cópia local:',err.message); return null; }
   }
   // Dispara o envio em segundo plano (nunca bloqueia a interface; falhas só geram aviso no console).
-  function queueCloudSync(){ if(supabaseConfigured()) pushSalesToSupabase().catch(err=>console.warn('Sincronização com a nuvem falhou:',err.message)); }
+  function queueCloudSync(){ if(supabaseConfigured()&&!_bootSyncing) pushSalesToSupabase().catch(err=>console.warn('Sincronização com a nuvem falhou:',err.message)); }
 
   const DATA_KEY = 'zmart_lar_plus_data_v5';
   const STATE_VERSION = 10; // v10: garante que o seed reflita o Contrato Kayo × Jussara mesmo com estado de demonstração antigo.
@@ -94,10 +119,12 @@
   const addMonths = (date, months) => { const d = new Date(date); d.setMonth(d.getMonth()+months); return d; };
   const iso = d => d.toISOString().slice(0,10);
 
+  let _bootSyncing = true; // suppress cloud push during boot init
   let state = loadState();
   activateSale(state.activeSaleId);
   if(!localStorage.getItem(DATA_KEY)){ try{const old=JSON.parse(localStorage.getItem('zmart_lar_plus_data_v4')||'null'); if(old){state=normalizeState(old);saveState();}}catch{} }
   ensureV5State();
+  _bootSyncing = false;
   function splitExact(total,count){
     total=Math.max(0,Number(total)||0); count=Math.max(0,Number(count)||0);
     if(!count) return [];
@@ -1201,6 +1228,8 @@
       state=normalizeState(cloudState);
       localStorage.setItem(DATA_KEY,JSON.stringify({version:STATE_VERSION,activeSaleId:state.activeSaleId,sales:state.sales,updatedAt:state.updatedAt}));
       activateSale(state.activeSaleId);
+      // Push the deduplicated state back to Supabase to clean up any duplicate rows
+      pushSalesToSupabase().catch(err=>console.warn('Limpeza pós-boot falhou:',err.message));
       if(role) render();
     }
   }
