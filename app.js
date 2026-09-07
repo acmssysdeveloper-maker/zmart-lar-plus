@@ -6,8 +6,13 @@
   // lateral e na página "Dados & Backup", para confirmar visualmente, dentro do
   // próprio app, se a atualização mais recente já está no ar (sem depender do GitHub).
   // ============================================================
-  const APP_VERSION = 'v7.4';
-  const APP_BUILD = '2026-09-07 · gráfico entrada parcial + botões próximo passo';
+  const APP_VERSION = 'v7.5';
+  const APP_BUILD = '2026-09-07 · tela neutra de privacidade no resumo';
+
+  // Controla se o dashboard está revelado ou protegido pela tela neutra.
+  // "false" = tela neutra visível (padrão ao navegar para o resumo).
+  // "true"  = conteúdo financeiro visível até sair da página.
+  let dashboardRevealed = false;
 
   // ============================================================
   // SINCRONIZAÇÃO EM NUVEM (Supabase) — opcional.
@@ -372,7 +377,7 @@
   function navItem(page,icon,label){return `<button class="nav-item ${currentPage===page?'active':''}" data-page="${page}"><span class="nav-ico">${icon}</span><span>${label}</span></button>`;}
   function appShell(){
     const seller=role==='vendedor';
-    return `<aside class="sidebar" id="sidebar"><div class="brand-block">${logo()}<div><div class="brand-title">ZMART Lar<span>+</span></div><div class="brand-tag">Do compromisso à realização.</div></div></div><div class="side-section-label">NAVEGAÇÃO</div><nav>${navItem('dashboard','⌂','Resumo')}${seller?navItem('vendas','◇','Vendas'):''}${navItem('parcelas','▦','Parcelas')}${navItem('entradas','⇥','Entradas')}${navItem('pagamentos','✓','Pagamentos')}${navItem('recibos','⌁','Comprovantes')}${navItem('simulacao','◌','Simular')}${navItem('relatorios','▤','Relatórios')}${seller?navItem('backup','☁','Dados & Backup'):''}</nav><div class="sidebar-bottom"><div><div class="role-line"><span class="role-dot"></span>${seller?'Vendedor · ADM':'Comprador · somente leitura'}</div><div class="app-version">${APP_VERSION}</div></div><button class="text-link light" id="logoutBtn">Sair</button></div></aside><div class="scrim" id="scrim"></div><div class="content"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="Abrir menu">☰</button><div class="mobile-brand"><span>ZMART Lar<span>+</span></span></div><div class="top-actions"><span class="role-badge">${seller?'ADM':'ACOMPANHAMENTO'}</span></div></header><main id="page" class="page"></main></div><div id="modalRoot"></div>`;
+    return `<aside class="sidebar" id="sidebar"><div class="brand-block">${logo()}<div><div class="brand-title">ZMART Lar<span>+</span></div><div class="brand-tag">Do compromisso à realização.</div></div></div><div class="side-section-label">NAVEGAÇÃO</div><nav>${navItem('dashboard','⌂','Resumo')}${seller?navItem('vendas','◇','Vendas'):''}${navItem('parcelas','▦','Parcelas')}${navItem('entradas','⇥','Entradas')}${navItem('pagamentos','✓','Pagamentos')}${navItem('recibos','⌁','Comprovantes')}${navItem('simulacao','◌','Simular')}${navItem('relatorios','▤','Relatórios')}${seller?navItem('backup','☁','Dados & Backup'):''}</nav><div class="sidebar-bottom"><div><div class="role-line"><span class="role-dot"></span>${seller?'Vendedor · ADM':'Comprador · somente leitura'}</div><div class="app-version">${APP_VERSION}</div></div><button class="text-link light" id="logoutBtn">Sair</button></div></aside><div class="scrim" id="scrim"></div><div class="content"><header class="topbar"><button class="menu-btn" id="menuBtn" aria-label="Abrir menu">☰</button><div class="mobile-brand"><span>ZMART Lar<span>+</span></span></div><div class="top-actions"><span class="role-badge">${seller?'ADM':'ACOMPANHAMENTO'}</span>${currentPage==='dashboard'?`<button class="priv-eye-btn" id="dashPrivacyToggle">${dashboardRevealed?'&#128065; Ocultar':'&#128065; Dados ocultos'}</button>`:''}</div></header><main id="page" class="page"></main></div><div id="modalRoot"></div>`;
   }
 
   function render(){ $('#app').innerHTML = role ? appShell() : loginView(); bindGlobal(); if(role) renderPage(currentPage); }
@@ -383,16 +388,19 @@
       if(btn){btn.disabled=false;btn.textContent='Entrar no ZMART Lar+';}
       const expected = r==='vendedor' ? (state.sellerPassword||'Zmart@123') : (state.buyerPassword||'Zmart@123');
       if(USERS[r] && p===expected){role=r;localStorage.setItem(ROLE_KEY,r);currentPage='dashboard';render();showToast('Acesso liberado.');}else showToast('Senha inválida.');});
-    $('#logoutBtn')?.addEventListener('click',()=>{role=null;localStorage.removeItem(ROLE_KEY);render();});
+    $('#logoutBtn')?.addEventListener('click',()=>{role=null;localStorage.removeItem(ROLE_KEY);dashboardRevealed=false;render();});
     $('#menuBtn')?.addEventListener('click',()=>toggleSidebar(true)); $('#scrim')?.addEventListener('click',()=>toggleSidebar(false));
     $$('.nav-item').forEach(b=>b.addEventListener('click',()=>{currentPage=b.dataset.page;toggleSidebar(false);renderPage(currentPage);}));
+    $('#dashPrivacyToggle')?.addEventListener('click',toggleDashboardPrivacy);
   }
   function toggleSidebar(open){$('#sidebar')?.classList.toggle('open',open);$('#scrim')?.classList.toggle('show',open);}
 
   function renderPage(page){
     currentPage=page;
+    // Ao navegar para o resumo, sempre começa protegido — exceto se já estava revelado nesta sessão de navegação.
+    if(page==='dashboard') dashboardRevealed=false;
     const f={dashboard:dashboardPage,vendas:vendasPage,parcelas:parcelasPage,entradas:entradasPage,pagamentos:pagamentosPage,recibos:receiptsPage,simulacao:simulationPage,relatorios:reportsPage,backup:backupPage}[page]||dashboardPage;
-    try{$('#page').innerHTML=f();bindPage(); if(page==='dashboard') drawDashboardCharts();}
+    try{$('#page').innerHTML=f();bindPage(); if(page==='dashboard') bindDashboardPrivacy();}
     catch(e){console.error(e);$('#page').innerHTML=`<div class="error-box"><strong>Não foi possível carregar esta página.</strong><span>${esc(e.message)}</span><button class="text-link" id="retry">Tentar novamente</button></div>`;$('#retry')?.addEventListener('click',()=>renderPage(page));}
   }
 
@@ -421,6 +429,63 @@
     const next=parcelasPend[0]||entradaPend||entradaParcial||null;
     return {next,entradaParcial,parcelasPend,entradaPend};
   }
+  // Tela neutra de privacidade — renderizada no lugar do dashboard até o usuário tocar em "Ver resumo".
+  function dashboardNeutralScreen(){
+    const propTitle = esc(state.property?.title || 'Acompanhamento financeiro');
+    return `
+    <div class="priv-neutral-screen" id="privNeutralScreen">
+      <div class="priv-neutral-bg-grid"></div>
+      <div class="priv-neutral-content">
+        <div class="priv-neutral-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#dbc28a" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+            <path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+        </div>
+        <div class="priv-neutral-eyebrow">ZMART LAR+</div>
+        <h1 class="priv-neutral-title">Acompanhamento<br>de compra e venda</h1>
+        <p class="priv-neutral-sub">Plataforma privada de controle financeiro imobiliário.<br><span class="priv-neutral-prop">${propTitle}</span></p>
+        <button class="priv-neutral-btn" id="privRevealBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="16" height="16">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+          Ver resumo
+        </button>
+        <p class="priv-neutral-hint">Nenhum dado financeiro é exibido antes disso</p>
+      </div>
+    </div>`;
+  }
+
+  // Liga os eventos da tela neutra e do botão de olho na topbar.
+  function bindDashboardPrivacy(){
+    // Botão central "Ver resumo"
+    $('#privRevealBtn')?.addEventListener('click', revealDashboard);
+    // Botão de olho na topbar (injetado em appShell via bindGlobal se dashboard estiver ativo)
+    $('#dashPrivacyToggle')?.addEventListener('click', toggleDashboardPrivacy);
+    // Desenha os gráficos se já estiver revelado
+    if(dashboardRevealed) drawDashboardCharts();
+  }
+
+  function revealDashboard(){
+    dashboardRevealed = true;
+    const screen = $('#privNeutralScreen');
+    const content = $('#dashRealContent');
+    if(screen) { screen.classList.add('priv-fade-out'); setTimeout(()=>screen.remove(), 280); }
+    if(content) { content.classList.remove('priv-content-hidden'); content.classList.add('priv-content-visible'); }
+    // Atualiza botão de olho na topbar
+    const btn = $('#dashPrivacyToggle');
+    if(btn) btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="13" height="13"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Ocultar`;
+    drawDashboardCharts();
+  }
+
+  function hideDashboard(){
+    dashboardRevealed = false;
+    renderPage('dashboard');
+  }
+
+  function toggleDashboardPrivacy(){
+    if(dashboardRevealed) hideDashboard(); else revealDashboard();
+  }
+
   function dashboardPage(){
     const c=calc();
     const entryDeadline=state.schedule?.entryDeadline||'';
@@ -443,7 +508,7 @@
       if(paidLateList.length){html+=`<div class="dlp-block late-paid-block"><div class="dlp-icon amber-icon">⏱</div><div><b>${paidLateList.length} pagamento${paidLateList.length!==1?'s':''} realizado${paidLateList.length!==1?'s':''} com atraso</b><span>Histórico de parcelas liquidadas após o vencimento</span></div><button class="text-link" data-pfilter-go="atrasados">ver histórico</button></div>`;}
       html+='</div>'; return html;
     })();
-    return `${pageHead('VISÃO GERAL',role==='vendedor'?'Controle claro. Decisões tranquilas.':'Seu sonho está avançando.','Uma visão simples do que já aconteceu, do que falta e do próximo passo.',role==='vendedor'?`${linkAction('editProperty','editar venda')} · ${linkAction('quickAdd','+ novo lançamento','gold-link')}`:linkAction('goSim','simular cenário'))}
+    const realContent = `${pageHead('VISÃO GERAL',role==='vendedor'?'Controle claro. Decisões tranquilas.':'Seu sonho está avançando.','Uma visão simples do que já aconteceu, do que falta e do próximo passo.',role==='vendedor'?`${linkAction('editProperty','editar venda')} · ${linkAction('quickAdd','+ novo lançamento','gold-link')}`:linkAction('goSim','simular cenário'))}
 
     <section class="stats-row">
       <article class="stat-box"><div class="stat-icon navy">🏠</div><div class="stat-body"><span>Valor do imóvel</span><strong>${money(state.property.total)}</strong></div></article>
@@ -462,6 +527,12 @@
 
     ${entradaParcial&&parcelasPend.length?`<section class="section-head"><div><h2>Entrada em andamento</h2><p>Saldo a quitar até o prazo limite.</p></div>${linkAction('goEntradas','ver entrada')}</section><article class="next-card" style="border-left:3px solid var(--gold)"><div><span>${esc(entradaParcial.label)}</span><strong>${money(installmentBalance(entradaParcial))}</strong><small>Saldo · prazo limite ${dateBR(entryDeadline||entradaParcial.dueDate)}</small></div><div class="next-actions">${role==='vendedor'?linkAction('validateEntrada','registrar pagamento','green-link'):''}${linkAction('entradaReceipt','comprovante')}</div></article>`:''}
     <section class="section-head"><div><h2>Próximo passo</h2><p>${nextDisplay?'O próximo compromisso financeiro.':'Você está em dia.'}</p></div>${nextDisplay?linkAction('openNext',nextDisplay.type==='parcela'?'ver parcela':'ver entrada'):''}</section>${nextDisplay?`<article class="next-card"><div><span>${esc(nextDisplay.label)}</span><strong>${money(nextDisplay._saldo>0?nextDisplay._saldo:nextDisplay.value)}</strong><small>${nextDisplay.type==='entrada'?(nextDisplay._saldo>0?`Saldo · prazo limite ${dateBR(nextDisplay._deadline)}`:`Prazo limite ${dateBR(nextDisplay._deadline)} · Pendente`):`Vencimento ${dateBR(nextDisplay.dueDate)} · ${nextDisplay.status==='partial'?'Parcial':'Pendente'}`}</small></div><div class="next-actions">${role==='vendedor'&&nextDisplay.status!=='paid'?linkAction('validateNext','validar','green-link'):''}${linkAction('nextReceipt','comprovante')}</div></article>`:`<div class="empty-card">Tudo certo por aqui. Continue acompanhando sua evolução.</div>`}`;
+
+    // Se não revelado: tela neutra + conteúdo oculto (pré-renderizado para evitar flash ao revelar)
+    if(!dashboardRevealed){
+      return `${dashboardNeutralScreen()}<div id="dashRealContent" class="priv-content-hidden">${realContent}</div>`;
+    }
+    return `<div id="dashRealContent">${realContent}</div>`;
   }
 
   function dashboardEntryTimeline(c){
